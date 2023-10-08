@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{Read, Result, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::str;
@@ -41,6 +42,16 @@ fn handle(stream: &mut TcpStream) {
             value.len(),
             value
         )
+    } else if req.path == "/user-agent" {
+        if let Some(agent) = req.headers.get("user-agent") {
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{}",
+                agent.len(),
+                agent
+            )
+        } else {
+            "HTTP/1.1 404 Not Found\r\n\r\n".to_string()
+        }
     } else {
         "HTTP/1.1 404 Not Found\r\n\r\n".to_string()
     };
@@ -56,7 +67,7 @@ fn handle(stream: &mut TcpStream) {
 struct Request {
     method: String,
     path: String,
-    headers: Vec<String>,
+    headers: HashMap<String, String>,
     body: String,
 }
 
@@ -73,7 +84,7 @@ fn get_request(stream: &mut TcpStream) -> Result<Request> {
 
     let start_line = data.next().expect("No start line");
 
-    let mut headers = Vec::new();
+    let mut headers = HashMap::new();
 
     loop {
         let header = data.next().expect("request truncated");
@@ -81,7 +92,11 @@ fn get_request(stream: &mut TcpStream) -> Result<Request> {
             break;
         }
 
-        headers.push(header.to_string());
+        if let [k, v] = header.splitn(2, ": ").collect::<Vec<&str>>()[..] {
+            headers.insert(k.to_lowercase(), v.to_string());
+        } else {
+            eprintln!("Error parsing header: {}", header);
+        }
     }
 
     let body = data.next().expect("request truncated");
