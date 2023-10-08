@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufReader, Read, Result, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, BufWriter, Read, Result, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::thread;
@@ -48,7 +48,11 @@ fn handle(mut stream: TcpStream, directory: PathBuf) {
     } else if req.path == "/user-agent" {
         get_user_agent_resp(&req)
     } else if req.path.starts_with("/files") {
-        get_file_resp(&req, &directory)
+        match req.method.as_str() {
+            "GET" => get_file_resp(&req, &directory),
+            "POST" => post_file_resp(&req, &directory),
+            _ => get_empty_resp("405 Method Not Allowed"),
+        }
     } else {
         get_empty_resp("404 Not Found")
     };
@@ -158,4 +162,23 @@ fn get_file_resp(request: &Request, directory: &PathBuf) -> String {
         buf.len(),
         String::from_utf8(buf).unwrap()
     )
+}
+
+fn post_file_resp(request: &Request, directory: &PathBuf) -> String {
+    let mut path = directory.clone();
+    path.push(request.path.strip_prefix("/files/").unwrap());
+
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&path)
+        .expect("error opening file for writing");
+
+    let mut writer = BufWriter::new(file);
+    writer
+        .write_all(&request.body.as_bytes())
+        .expect("Error writing file");
+
+    "HTTP/1.1 201 Created\r\n\r\n".to_string()
 }
