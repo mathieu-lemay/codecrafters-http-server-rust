@@ -1,16 +1,26 @@
 use std::collections::HashMap;
-use std::io::{Read, Result, Write};
+use std::fs::File;
+use std::io::{BufReader, Read, Result, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::str;
+use std::path::PathBuf;
 use std::thread;
+use std::{env, str};
 
 fn main() {
+    let args: Vec<String> = env::args().collect();
+    let directory = if args.len() == 3 && args[1] == "--directory" {
+        PathBuf::from(&args[2])
+    } else {
+        PathBuf::from(".")
+    };
+
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
 
     for stream in listener.incoming() {
         match stream {
             Ok(mut _stream) => {
-                thread::spawn(|| handle(_stream));
+                let directory = directory.clone();
+                thread::spawn(|| handle(_stream, directory));
             }
             Err(e) => {
                 println!("error: {}", e);
@@ -19,11 +29,11 @@ fn main() {
     }
 }
 
-fn handle(mut stream: TcpStream) {
+fn handle(mut stream: TcpStream, directory: PathBuf) {
     let addr = stream.peer_addr().expect("Unable to get peer_addr");
     println!("accepted new connection from {:?}", addr);
 
-    let req = match get_request(&mut stream) {
+    let req = match parse_request(&mut stream) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Error reading stream: {:?}", e);
@@ -32,26 +42,15 @@ fn handle(mut stream: TcpStream) {
     };
 
     let resp = if req.path == "/" {
-        "HTTP/1.1 200 OK\r\n\r\n".to_string()
+        get_empty_resp("200 OK")
     } else if req.path.starts_with("/echo/") {
-        let value = &req.path[6..];
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{}",
-            value.len(),
-            value
-        )
+        get_echo_resp(&req)
     } else if req.path == "/user-agent" {
-        if let Some(agent) = req.headers.get("user-agent") {
-            format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{}",
-                agent.len(),
-                agent
-            )
-        } else {
-            "HTTP/1.1 404 Not Found\r\n\r\n".to_string()
-        }
+        get_user_agent_resp(&req)
+    } else if req.path.starts_with("/files") {
+        get_file_resp(&req, &directory)
     } else {
-        "HTTP/1.1 404 Not Found\r\n\r\n".to_string()
+        get_empty_resp("404 Not Found")
     };
 
     match stream.write(resp.as_bytes()) {
@@ -73,7 +72,7 @@ struct Request {
     body: String,
 }
 
-fn get_request(stream: &mut TcpStream) -> Result<Request> {
+fn parse_request(stream: &mut TcpStream) -> Result<Request> {
     let mut buf = [0; 2048];
 
     let n = stream.read(&mut buf)?;
@@ -103,7 +102,7 @@ fn get_request(stream: &mut TcpStream) -> Result<Request> {
 
     let body = data.next().expect("request truncated");
 
-    let parts: Vec<&str> = start_line.split(" ").collect();
+    let parts: Vec<&str> = start_line.split(' ').collect();
 
     let request = Request {
         method: String::from(parts[0]),
@@ -113,5 +112,50 @@ fn get_request(stream: &mut TcpStream) -> Result<Request> {
     };
     println!("Request: {:#?}", request);
 
-    return Ok(request);
+    Ok(request)
+}
+
+fn get_empty_resp(status: &str) -> String {
+    format!("HTTP/1.1 {}\r\n\r\n", status)
+}
+
+fn get_echo_resp(request: &Request) -> String {
+    let value = &request.path.strip_prefix("/echo/").unwrap();
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{}",
+        value.len(),
+        value
+    )
+}
+
+fn get_user_agent_resp(request: &Request) -> String {
+    if let Some(agent) = request.headers.get("user-agent") {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{}",
+            agent.len(),
+            agent
+        )
+    } else {
+        get_empty_resp("404 Not Found")
+    }
+}
+
+fn get_file_resp(request: &Request, directory: &PathBuf) -> String {
+    let mut path = directory.clone();
+    path.push(request.path.strip_prefix("/files/").unwrap());
+
+    if !path.exists() {
+        return get_empty_resp("404 Not Found");
+    }
+
+    let mut buf: Vec<u8> = Vec::new();
+
+    let mut reader = BufReader::new(File::open(&path).unwrap());
+    reader.read_to_end(&mut buf).expect("error reading file");
+
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\n\r\n{}",
+        buf.len(),
+        String::from_utf8(buf).unwrap()
+    )
 }
