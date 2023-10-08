@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::{Read, Result, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::str;
+use std::thread;
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
@@ -9,10 +10,7 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(mut _stream) => {
-                handle(&mut _stream);
-                _stream
-                    .shutdown(Shutdown::Both)
-                    .expect("Error closing stream");
+                thread::spawn(|| handle(_stream));
             }
             Err(e) => {
                 println!("error: {}", e);
@@ -21,11 +19,11 @@ fn main() {
     }
 }
 
-fn handle(stream: &mut TcpStream) {
+fn handle(mut stream: TcpStream) {
     let addr = stream.peer_addr().expect("Unable to get peer_addr");
     println!("accepted new connection from {:?}", addr);
 
-    let req = match get_request(stream) {
+    let req = match get_request(&mut stream) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Error reading stream: {:?}", e);
@@ -60,6 +58,10 @@ fn handle(stream: &mut TcpStream) {
         Ok(n) => println!("Successfully wrote {} bytes to stream", n),
         Err(e) => eprintln!("Error writing to stream: {:?}", e),
     }
+
+    stream
+        .shutdown(Shutdown::Both)
+        .expect("Error closing stream");
 }
 
 #[derive(Debug)]
