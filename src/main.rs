@@ -33,9 +33,16 @@ fn handle(stream: &mut TcpStream) {
     };
 
     let resp = if req.path == "/" {
-        "HTTP/1.1 200 OK\r\n\r\n"
+        "HTTP/1.1 200 OK\r\n\r\n".to_string()
+    } else if req.path.starts_with("/echo/") {
+        let value = &req.path[6..];
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{}",
+            value.len(),
+            value
+        )
     } else {
-        "HTTP/1.1 404 Not Found\r\n\r\n"
+        "HTTP/1.1 404 Not Found\r\n\r\n".to_string()
     };
 
     match stream.write(resp.as_bytes()) {
@@ -44,9 +51,13 @@ fn handle(stream: &mut TcpStream) {
     }
 }
 
+#[derive(Debug)]
+#[allow(dead_code)]
 struct Request {
     method: String,
     path: String,
+    headers: Vec<String>,
+    body: String,
 }
 
 fn get_request(stream: &mut TcpStream) -> Result<Request> {
@@ -55,17 +66,35 @@ fn get_request(stream: &mut TcpStream) -> Result<Request> {
     let n = stream.read(&mut buf)?;
     println!("Successfully read {} bytes from stream", n);
 
-    let start_line = str::from_utf8(&buf)
-        .expect("Invalid http request")
-        .split("\r\n")
-        .next()
-        .expect("No start line found");
+    let raw_request = str::from_utf8(&buf[..n]).expect("Invalid http request");
+    println!("\nRaw request:\n======\n{}\n======\n", raw_request);
 
-    println!("Start line: {}", start_line);
+    let mut data = raw_request.split("\r\n");
+
+    let start_line = data.next().expect("No start line");
+
+    let mut headers = Vec::new();
+
+    loop {
+        let header = data.next().expect("request truncated");
+        if header.is_empty() {
+            break;
+        }
+
+        headers.push(header.to_string());
+    }
+
+    let body = data.next().expect("request truncated");
+
     let parts: Vec<&str> = start_line.split(" ").collect();
 
-    return Ok(Request {
+    let request = Request {
         method: String::from(parts[0]),
         path: String::from(parts[1]),
-    });
+        headers,
+        body: String::from(body),
+    };
+    println!("Request: {:#?}", request);
+
+    return Ok(request);
 }
